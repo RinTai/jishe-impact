@@ -19,7 +19,7 @@ public class Player : MonoBehaviour
     public static Vector2 transfor;
     public Vector3 Playertran;//玩家的朝向
     //以下为冲刺代码
-    bool isdash = false;//是否冲刺
+    public bool isdash = false;//是否冲刺
     float dashtime = 0.2f;
     float dashtimeleft, dashCD = 1f, dashLast = -10f;
     float dashspeed = 50f;
@@ -27,13 +27,13 @@ public class Player : MonoBehaviour
     float Dashdirection_Y;//冲刺用数据
     float Force = 5f;
     bool Wantdash = false;
-    bool isAttack = false,isLadder=false,isClimbing=false;
+    bool isAttack = false, isLadder = false, isClimbing = false;
     //以下为跳跃检测
     [Range(1, 10)]
     private float jumpSpeed = 8f;
     private bool moveJump;//判断是否按下跳跃
     public bool isGround;//判断是否在地面上
-    public Transform groundCheck;//地面检测
+    public Transform groundCheck, WallCheck_L, WallCheck_R;//地面检测
     public LayerMask ground;
     //以下为跳跃优化
     public float fallMultiplier = 1000f;//大跳的重力
@@ -61,6 +61,28 @@ public class Player : MonoBehaviour
     public GameObject hitbox;//徒手近战
     //以下为攻击计时器
     public float attackTimer;//攻击时间
+    //以下为墙面检测
+    bool isWall_L = false, isWall_R = false, isWall = false;
+    //以下为蹲下 
+    bool isSquat = false;
+    float SquatTemp;
+    //以下为摔死
+    bool isDead = false;
+    float outGroud = 2f;
+    float ps = 5f;//体力
+    Vector2 TempTrans;
+    float OnGournd = 3f;
+    Time TempTime;
+    //草药检测
+    bool isgathering = false;
+    GameObject Herb;
+    float GatheringTick = 2f;
+    //行动
+    Rigidbody2D m_Rigidbody;
+    Vector2 PlayerInput;
+    float LinearDrag = 40f;
+    float targetSpeed = 10f;
+    float acceleration = 50f;
 
     private void Awake()
     {
@@ -69,23 +91,35 @@ public class Player : MonoBehaviour
     // Start is called before the first frame update
     void Start()
     {
+
         v = Mathf.Sqrt(2 * h / g);
         rb = gameObject.GetComponent<Rigidbody2D>();
         inputpos = new Vector2();
-        Playertran = rb.transform.localScale;
         sr = gameObject.GetComponent<SpriteRenderer>();//颜色组件
         hitbox.SetActive(false);//禁用武器
+        m_Rigidbody = rb;
     }
     void Update()
     {
+        PlayerInput = Getinput();
+        Debug.Log(isWall_L);
         transfor = this.gameObject.transform.position;
         if (!beattack && !isSkill)
         {
             if (!isdash)//玩家行动在这里面写0.0
             {
-                PlayerJumpByTwice();
+                Fall_Death();
+                if (!isSquat)
+                {
+                    PlayerJumpByTwice();
+                    ClimbJump();
+                    Climb();
+                }
+
                 MoveObject();
-                Climb();
+                Squat();
+                Die();
+
                 if (Input.GetKeyDown(KeyCode.J))//攻击
                 {
                     isAttack = true;
@@ -119,14 +153,33 @@ public class Player : MonoBehaviour
     }
     private void FixedUpdate()//固定为每秒50次检测的固定补足更新
     {
+        if(!isdash)
+        MoveMet();
         isGround = Physics2D.OverlapCircle(groundCheck.position, 0.1f, ground);//地面检测
+        if (isGround)
+        {
+            OnGournd -= Time.deltaTime;
+            if (OnGournd <= 0)
+            {
+                OnGournd = 3f;
+                TempTrans = player.transform.position;
+            }
+        }
+        isWall_L = Physics2D.OverlapCircle(WallCheck_L.position, 0.1f, ground);//墙面检测左
+        isWall_R = Physics2D.OverlapCircle(WallCheck_R.position, 0.1f, ground);//墙面检测右
+        if ((!isWall_L && !isWall_R) || Input.GetAxisRaw("Horizontal") == 0)
+        {
+            isWall = false;
+        }
+
     }
     public void MoveObject()//检测玩家的朝向的基础移动
     {
+
+        Playertran = rb.transform.localScale;
         inputpos = rb.velocity;
-        inputpos.x = Input.GetAxisRaw("Horizontal") * speed;
+        inputpos.x = Input.GetAxisRaw("Horizontal");
         animator.SetFloat("SpeedX", Mathf.Abs(inputpos.x));//行走动画的转向
-        rb.velocity = inputpos;
         if (inputpos.x < 0)
         {
             Playertran.x = -Mathf.Abs(Playertran.x);
@@ -154,6 +207,7 @@ public class Player : MonoBehaviour
                 Dashdirection_X = 0;
         }
         rb.transform.localScale = Playertran;
+
     }
     void Dash()//冲刺完整代码
     {
@@ -204,18 +258,18 @@ public class Player : MonoBehaviour
         //我是分界线，以下为优化跳跃手感内容
         if (Input.GetButtonDown("Jump") && rb.velocity.y < 0 && jumpCount > 0)
         {
-            rb.velocity = Vector2.up * 9;
+            rb.velocity += Vector2.up * 4;
         }
-        else if (rb.velocity.y < 0 && !Input.GetButtonDown("Jump"))
+        else if (rb.velocity.y < 0 && !Input.GetButtonDown("Jump") && !isWall)
         {
             if (jumpCount > 0) rb.velocity += Vector2.up * Physics2D.gravity.y * fallMultiplier * Time.deltaTime;
             if (jumpCount == 0) rb.gravityScale = fallMultiplier;
         }
-        else if (rb.velocity.y > 0 && !Input.GetButton("Jump"))
+        else if (rb.velocity.y > 0 && !Input.GetButton("Jump") && !isWall)
         {
             rb.gravityScale = lowJumpMultiplier;
         }
-        else
+        else if (!isWall)
         {
             rb.gravityScale = 1.5f;
         }
@@ -230,6 +284,7 @@ public class Player : MonoBehaviour
         {
             jumpCount = (int)2f;//四舍五入为2
             animator.SetBool("IsJump", false);//跳跃动画的转向
+            outGroud = 2f;
         }
         if (isJump)
         {
@@ -294,18 +349,52 @@ public class Player : MonoBehaviour
     {
         if (isLadder && isClimbing)
             rb.gravityScale = 0;
-        if(isLadder)
+        if (isLadder)
         {
             if (Input.GetAxisRaw("Vertical") != 0)
             {
                 isClimbing = true;
             }
-            rb.velocity = new Vector2(rb.velocity.x, Input.GetAxisRaw("Vertical")*4f);
+            rb.velocity = new Vector2(rb.velocity.x, Input.GetAxisRaw("Vertical") * 4f);
         }
     }
-    void ClimbCheck()//检查在梯子上时的一系列动作
+    void ClimbJump()//蹭墙跳
     {
-
+        if ((isWall_L) || (isWall_R))
+        {
+            if (rb.velocity.y > 0.2f && isWall)
+                rb.velocity = new Vector2(rb.velocity.x, 0.1f);
+            if (Input.GetAxisRaw("Horizontal") != 0 && Input.GetAxisRaw("Vertical") != 0)
+            {
+                isWall = true;
+            }
+            if (Input.GetKey(KeyCode.P))
+            {
+                rb.velocity = new Vector2(Input.GetAxisRaw("Horizontal"), Input.GetAxisRaw("Vertical") * 4f);
+                rb.gravityScale = 0;
+            }
+            if (isWall)
+                rb.gravityScale = 0.3f;
+        }
+    }
+    void Squat()//下蹲
+    {
+        if ((isGround && Input.GetKey(KeyCode.S)))
+        {
+            player.GetComponent<CircleCollider2D>().enabled = true;
+            player.GetComponent<CapsuleCollider2D>().enabled = false;
+            isSquat = true;
+            dashspeed = 70f;
+            speed = 2.5f;
+        }
+        else if (!Input.GetKey(KeyCode.S))
+        {
+            isSquat = false;
+            player.GetComponent<CircleCollider2D>().enabled = false;
+            player.GetComponent<CapsuleCollider2D>().enabled = true;
+            dashspeed = 50f;
+            speed = 5f;
+        }
     }
     private void OnCollisionEnter2D(Collision2D collision)//玩家的受击
     {
@@ -329,7 +418,7 @@ public class Player : MonoBehaviour
     }
     private void OnTriggerStay2D(Collider2D collision)
     {
-        if(collision.gameObject.tag == "Ladder")
+        if (collision.gameObject.tag == "Ladder")
         {
             isLadder = true;
         }
@@ -337,6 +426,16 @@ public class Player : MonoBehaviour
         {
             isLadder = false;
             isClimbing = false;
+        }
+        if (collision.gameObject.tag == "Herbs")
+        {
+            isgathering = true;
+            Herb = collision.gameObject;
+        }
+        else
+        {
+            isgathering = false;
+            Herb = null;
         }
     }
     private void OnTriggerExit2D(Collider2D collision)
@@ -346,6 +445,71 @@ public class Player : MonoBehaviour
             isLadder = false;
             isClimbing = false;
         }
+    }
+    IEnumerator TimeTick(float TIME)
+    {
+        yield return (TIME);
+    }
+    void Fall_Death()
+    {
+        if (!isGround && !isWall && !isLadder)
+        {
+            outGroud -= Time.deltaTime;
+        }
+        if (outGroud <= 0 && isGround)
+        {
+            isDead = true;
+            Debug.Log("你死了");
+        }
+    }
+    void acquisition()
+    {
+        if (isgathering)
+        {
+            if (Input.GetKey(KeyCode.J))
+            {
+                GatheringTick -= Time.deltaTime;
+                if (GatheringTick < 0)
+                {
+                    GatheringTick = 2f;
+                    //放进背包;
+                }
+            }
+        }
+    }
+    void Die()
+    {
+        if (isDead)
+        {
+            isDead = false;
+            //播放死亡动画
+            StartCoroutine(TimeTick(2f));//死亡动画的播放
+            player.transform.position = TempTrans;
+        }
+    }
+    void MoveMet()
+    {
+        m_Rigidbody.AddForce(new Vector2(PlayerInput.x, 0) * acceleration);
+        if (Mathf.Abs(m_Rigidbody.velocity.x) > targetSpeed)
+        {
+            m_Rigidbody.velocity = new Vector2(Mathf.Sign(m_Rigidbody.velocity.x) * targetSpeed, m_Rigidbody.velocity.y);
+        }
+        ApplyLinerDrag();
+    }
+    void ApplyLinerDrag()
+    {
+        if ((Mathf.Abs(PlayerInput.x) < 0.4f && isGround )|| isClimbing&&!isJump)
+        {
+            m_Rigidbody.drag = LinearDrag;
+        }
+        else
+        {
+            m_Rigidbody.drag = 0f;
+        }
+    }
+    private Vector2 Getinput()
+    {
+        return new Vector2(Input.GetAxisRaw("Horizontal"), Input.GetAxisRaw("Vertical"));
     }
 }
 
